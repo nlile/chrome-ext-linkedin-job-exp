@@ -10,3 +10,5 @@ test/linkedin_job_page.html
 
 # Dependency directories
 node_modules/
+
+cookies_export.json

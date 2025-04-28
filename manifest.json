@@ -1,0 +1,14 @@
+{
+    "name": "LinkedIn Applicants Exporter",
+    "description": "One-click CSV export of every applicant shown in the LinkedIn Jobs dashboard.",
+    "version": "1.0.0",
+    "manifest_version": 3,
+    "action": {
+      "default_title": "Export applicants",
+      "default_popup": "popup.html"
+    },
+    "permissions": ["scripting", "activeTab"],
+    "host_permissions": ["https://www.linkedin.com/*"]
+  }
+
+  
