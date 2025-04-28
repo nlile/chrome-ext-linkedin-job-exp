@@ -1,0 +1,12 @@
+# Test files containing sensitive data
+test/linkedin_job_page.html
+
+# IDE specific files
+.idea/
+*.iml
+
+# OS specific files
+.DS_Store
+
+# Dependency directories
+node_modules/
