@@ -3,9 +3,13 @@
   // prevent double runs if user clicks multiple times quickly
   if (window.__LI_EXPORT_RUNNING) {
     console.warn("Exporter is already running.");
+    alert("Exporter is already running. Click again to stop and export current data.");
+    window.__LI_EXPORT_TERMINATE = true;
     return;
   }
   window.__LI_EXPORT_RUNNING = true;
+  window.__LI_EXPORT_TERMINATE = false;
+  window.__LI_EXPORT_DATA = [];
   console.log("linkedin applicants exporter: starting...");
 
   // --- helpers ---
@@ -121,6 +125,20 @@
     // Click show more buttons and wait
     await clickShowMoreAndWait(root, "button[aria-label*='more experiences']", "experience");
     await clickShowMoreAndWait(root, "button[aria-label*='more educations']", "education");
+    await clickShowMoreAndWait(root, "button[aria-label*='more about resume']", "resume");
+    
+    // Click any inline show more text buttons
+    const inlineButtons = qsa("button.inline-show-more-text__button", root);
+    for (const button of inlineButtons) {
+      try {
+        if (button && !button.closest(".inline-show-more-text--is-expanded")) {
+          button.click();
+          await sleep(200);
+        }
+      } catch (e) {
+        console.warn("Failed to expand inline text:", e);
+      }
+    }
 
     // helper to safely get text content
     const textSafe = (sel, context = root, def = "") => {
@@ -133,6 +151,21 @@
             return def;
         }
     };
+    
+    // helper to safely get attribute from element
+    const attrSafe = (sel, attr, context = root, def = "") => {
+        try {
+            const element = qs(sel, context);
+            const value = element?.[attr] ?? element?.getAttribute(attr) ?? def;
+            return value;
+        } catch (e) {
+            console.warn(`attrSafe: error for selector="${sel}" attr="${attr}". returning default.`);
+            return def;
+        }
+    };
+    
+    // Extract applicant_id from URL if possible
+    const applicant_id = profile_url?.match(/\/applicants\/([0-9]+)\/detail/)?.[1] || "";
 
     // --- Basic Info ---
     const h1Element = qs("h1", root);
@@ -141,24 +174,41 @@
     const name = nameHeader.split(/['']s application/)[0]?.trim() || nameHeader;
     console.log(`extract: calculated name="${name}"`);
 
-    // Using script's robust selectors based on structure
-    const headline = textSafe("h1 + div > div.t-16");
-    const location = textSafe("h1 + div > div:nth-child(2)");
-    const applied = textSafe(".hiring-applicant-header__tidbit");
-    const degree = textSafe(".hiring-applicant-header__badge");
+    // Using robust selectors based on HTML_ELEMENTS_TO_SAVE.md
+    const headline = textSafe(".hiring-applicant-header > div .t-16:nth-of-type(1)") || 
+                     textSafe("h1 + div > div.t-16");
+    const location = textSafe(".hiring-applicant-header > div .t-16:nth-of-type(2)") || 
+                     textSafe("h1 + div > div:nth-child(2)");
+    const applied_time = textSafe(".hiring-applicant-header__tidbit");
+    const connection_degree = textSafe(".hiring-applicant-header__badge") || 
+                              textSafe(".hiring-applicant-header h1 + span");
 
-    // Using script's robust selectors
+    // Rating extraction
+    let rating = "UNRATED";
+    const ratingElements = qsa('div.flex-1 > div:nth-of-type(1) > div', root);
+    for (const el of ratingElements) {
+      if (el.getAttribute('aria-pressed') === 'true') {
+        rating = el.innerText.trim().toUpperCase().replace(/\s+/g, '_');
+        break;
+      }
+    }
+
+    // Using script's robust selectors for profile and resume
     const profileLinkElement = qs(".hiring-profile-highlights__see-full-profile a", root);
     const profile_url = profileLinkElement?.href ?? "";
     console.log(`extract: profile link found=${!!profileLinkElement}, profile_url="${profile_url}"`);
 
-    const resumeLinkElement = qs('a[href*="ambry"][aria-label^="Download"]', root);
-    const resume_url = resumeLinkElement?.href ?? "";
-    console.log(`extract: resume link found=${!!resumeLinkElement}, resume_url="${resume_url}"`);
+    const resumeLinkElement = qs('.hiring-resume-viewer__resume-wrapper--collapsed a[href*="ambry"]', root) || 
+                              qs('a[href*="ambry"][aria-label^="Download"]', root);
+    const resume_download_url = resumeLinkElement?.href ?? "";
+    console.log(`extract: resume link found=${!!resumeLinkElement}, resume_url="${resume_download_url}"`);
+    
+    // Resume iframe source
+    const resume_iframe_src = attrSafe(".hiring-resume-viewer__iframe", "src");
 
     // --- Refined Experience/Education Section Identification & Scraping ---
-    let experiences = [];
-    let educations = [];
+    let experience_items = [];
+    let education_items = [];
     const sections = qsa("section", root);
     console.log(`extract: found ${sections.length} sections to check.`);
 
@@ -170,53 +220,95 @@
 
         if (h3Text === 'Experience') {
             console.log(`extract: found experience section with ${listItems.length} potential items.`);
-            experiences = listItems.map(li => {
+            experience_items = listItems.map(li => {
                 return {
                     title: textSafe("p.t-14.t-black", li),
                     company: textSafe("p.t-14.t-black--light", li),
-                    duration: textSafe("p.t-12.t-black--light span[aria-hidden='true']", li)
+                    dates: textSafe("p.t-12.t-black--light span[aria-hidden='true']", li)
                 };
             }).filter(exp => exp.title || exp.company);
         } else if (h3Text === 'Education') {
             console.log(`extract: found education section with ${listItems.length} potential items.`);
-            educations = listItems.map(li => {
+            education_items = listItems.map(li => {
                 return {
                     school: textSafe("p.t-14", li),
-                    degree_field: textSafe("p.t-12.t-black--light", li),
-                    duration: textSafe("p.t-12.t-black--light:nth-of-type(2) span[aria-hidden='true']", li)
+                    degree: textSafe("p.t-12.t-black--light", li),
+                    dates: textSafe("p.t-12.t-black--light:nth-of-type(2) span[aria-hidden='true']", li)
                 };
             }).filter(edu => edu.school);
         }
     }
-    console.log(`extract: processed sections, found ${experiences.length} experiences, ${educations.length} educations.`);
+    console.log(`extract: processed sections, found ${experience_items.length} experiences, ${education_items.length} educations.`);
+    
+    // Extract work snippet from left column if available
+    const work_snippet = qsa("ul[aria-label='Work experience'] li span.lt-line-clamp__line", document)
+      .map(el => el.innerText.trim())
+      .filter(Boolean);
+    
+    // Extract preferred qualifications
+    let preferred_qualifications_met = null;
+    let preferred_qualifications_total = null;
+    const prefQualText = textSafe(".hiring-screening-questions h3");
+    if (prefQualText) {
+      const matches = prefQualText.match(/(\d+)\s*out of\s*(\d+)/);
+      if (matches && matches.length >= 3) {
+        preferred_qualifications_met = parseInt(matches[1], 10);
+        preferred_qualifications_total = parseInt(matches[2], 10);
+      }
+    }
+    
+    // View status (viewed/unviewed)
+    let view_status = null;
+    // This would typically be extracted from the list view, not the detail view
+    // We'll leave it null for now as it's not easily accessible from the detail panel
 
 
-    // Screening Questions Scraping
-     const screening = qsa(".job-posting-shared-screening-question-list__list-item", root)
+    // Screening Questions Scraping - improved based on HTML_ELEMENTS_TO_SAVE.md
+    const screening_questions = qsa(".hiring-screening-questions ul li", root)
       .map(li => {
-         const qElem = qs("p.t-14", li);
+         const qElem = qs("p.t-14:first-of-type", li);
          const idealElem = qs("p.t-12 span:nth-of-type(2)", li);
          const ansElem = qs("p.t-14.t-bold", li);
+         const metElem = qs("svg[class$='--succeeded']", li);
+         
          return {
-            q: qElem?.innerText.trim() ?? "",
+            question: qElem?.innerText.trim() ?? "",
             ideal: idealElem?.innerText.trim() ?? "",
-            ans: ansElem?.innerText.trim() ?? ""
-         }
+            answer: ansElem?.innerText.trim() ?? "",
+            met: !!metElem
+         };
       })
-      .filter(s => s.q);
-     console.log(`extract: found ${screening.length} screening questions.`);
+      .filter(s => s.question);
+    console.log(`extract: found ${screening_questions.length} screening questions.`);
 
+    // Build comprehensive applicant data object based on HTML_ELEMENTS_TO_SAVE.md
     const applicantData = {
+        // Basic identifiers
+        applicant_id,
+        profile_url,
         name,
+        
+        // Basic profile info
+        connection_degree,
         headline,
         location,
-        applied,
-        degree,
-        profile_url,
-        resume_url,
-        experience_json: experiences.length > 0 ? JSON.stringify(experiences) : "",
-        education_json: educations.length > 0 ? JSON.stringify(educations) : "",
-        screening_json: screening.length > 0 ? JSON.stringify(screening) : "",
+        applied_time,
+        
+        // Qualifications
+        preferred_qualifications_met,
+        preferred_qualifications_total,
+        
+        // List view data
+        work_snippet: work_snippet.length > 0 ? work_snippet.join(" | ") : null,
+        view_status,
+        
+        // Detail view data
+        rating,
+        experience_items: experience_items.length > 0 ? JSON.stringify(experience_items) : null,
+        education_items: education_items.length > 0 ? JSON.stringify(education_items) : null,
+        resume_download_url: resume_download_url || null,
+        resume_iframe_src: resume_iframe_src || null,
+        screening_questions: screening_questions.length > 0 ? JSON.stringify(screening_questions) : null,
     };
 
     console.log("extract: returning applicantData:", JSON.stringify(applicantData)); // Stringify for cleaner log
@@ -226,9 +318,10 @@
 
   // ---------- main loop ----------
   const data = [];
+  window.__LI_EXPORT_DATA = data; // Store data globally for early termination export
   let currentPage = 1;
   // selector for the clickable applicant links in the list
-  const applicantLinkSelector = "li.hiring-applicants__list-item a";
+  const applicantLinkSelector = "li.hiring-applicants__list-item a[href*='/applicants/']";
   // selector for the list container itself
   const listContainerSelector = ".hiring-applicants__list-container";
 
@@ -255,9 +348,27 @@
     console.log(`found ${applicantLinks.length} applicants on page ${currentPage}.`);
 
     for (let i = 0; i < applicantLinks.length; i++) {
+      // Check for early termination flag
+      if (window.__LI_EXPORT_TERMINATE) {
+        console.log("Early termination requested. Stopping scraping and proceeding to export.");
+        break;
+      }
+      
       const link = applicantLinks[i];
       console.log(`processing applicant ${i + 1}/${applicantLinks.length} on page ${currentPage}...`);
       try {
+        // Extract applicant_id from href for list view data
+        const applicantIdMatch = link.href.match(/\/applicants\/([0-9]+)\/detail/);
+        const applicantId = applicantIdMatch ? applicantIdMatch[1] : "";
+        
+        // Get view status from list item before clicking
+        const listItem = link.closest("li.hiring-applicants__list-item");
+        let viewStatus = null;
+        if (listItem) {
+          const hasDot = !!qs(".hiring-people-card__image-dot", listItem);
+          viewStatus = hasDot ? "unviewed" : "viewed";
+        }
+        
         // scroll applicant link into view if not fully visible
         const linkRect = link.getBoundingClientRect();
         if (linkRect.top < 0 || linkRect.bottom > window.innerHeight) {
@@ -273,6 +384,11 @@
 
         const applicantData = await extract();
         if (applicantData?.name) { // ensure data & name extracted
+          // Add view status from list view if available
+          if (viewStatus) {
+            applicantData.view_status = viewStatus;
+          }
+          
           data.push(applicantData);
           console.log(` --> SUCCESSFULLY extracted: ${applicantData.name}`);
         } else {
@@ -311,23 +427,40 @@
     console.warn("no data extracted. cannot generate csv.");
     alert("export failed: no applicant data could be extracted.");
     window.__LI_EXPORT_RUNNING = false;
+    window.__LI_EXPORT_TERMINATE = false;
     return;
   }
 
   console.log(`extraction complete. found ${data.length} total applicants. generating csv...`);
 
-  // Updated header order for csv
+  // Updated header order for csv based on HTML_ELEMENTS_TO_SAVE.md
   const header = [
+    // Basic identifiers
+    "applicant_id",
+    "profile_url",
     "name",
+    
+    // Basic profile info
+    "connection_degree",
     "headline",
     "location",
-    "applied",
-    "degree",
-    "profile_url",
-    "resume_url",
-    "experience_json",
-    "education_json",
-    "screening_json",
+    "applied_time",
+    
+    // Qualifications
+    "preferred_qualifications_met",
+    "preferred_qualifications_total",
+    
+    // List view data
+    "work_snippet",
+    "view_status",
+    
+    // Detail view data
+    "rating",
+    "experience_items",
+    "education_items",
+    "resume_download_url",
+    "resume_iframe_src",
+    "screening_questions",
   ];
 
   // generate csv rows, ensuring values are strings and properly quoted/escaped
@@ -362,5 +495,6 @@
   }
 
   window.__LI_EXPORT_RUNNING = false; // reset flag
+  window.__LI_EXPORT_TERMINATE = false; // reset termination flag
   console.log("linkedin applicants exporter: finished.");
 })();
