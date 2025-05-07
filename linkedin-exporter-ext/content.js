@@ -90,35 +90,78 @@
     });
 
   // helper to click "show more" buttons and wait for potential content changes
-  const clickShowMoreAndWait = async (root, buttonSelector, description) => {
+  const clickShowMoreAndWait = async (root, buttonSelector, description, retryCount = 3) => {
     try {
       const button = qs(buttonSelector, root);
       if (button && !button.closest("[aria-hidden='true'], .visually-hidden")) {
         console.log(`clicking "show more ${description}"...`);
-        const parentSection = button.closest('section'); // Find parent section
-        if (!parentSection) {
-            console.warn(`could not find parent section for "show more ${description}" button.`);
-            return false; // Cannot proceed without parent section
-        }
-        button.scrollIntoView({ block: 'center' });
-        await sleep(250); // Short delay before click
+        const parentSection = button.closest('section') || root; // Find parent section or use root as fallback
+        
+        // Ensure button is visible in viewport
+        button.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        await sleep(500); // Longer delay before click to ensure UI is ready
+        
+        // Get content length before click to verify changes after
+        const contentBefore = parentSection.innerHTML.length;
+        
+        // Click the button
         button.click();
+        console.log(`clicked "show more ${description}" button`);
+        
         // Find the list element within the parent section AFTER clicking
         const listElement = qs('ul', parentSection);
-        if (!listElement) {
-             console.warn(`could not find list (ul) within parent section for "show more ${description}".`);
-             // Still resolve sleep, maybe content appeared without ul mutation
-             await sleep(500);
-        } else {
+        
+        // Wait for either mutations or content length change
+        if (listElement) {
             // Wait for mutations in the list element after clicking
-            await waitForMutation(listElement);
+            await waitForMutation(listElement, { childList: true, subtree: true, attributes: true }, 3000);
+            console.log(`mutation detected in list for "${description}"`);
+        } 
+        
+        // Additional wait to ensure content is loaded
+        await sleep(800);
+        
+        // Verify content changed
+        const contentAfter = parentSection.innerHTML.length;
+        if (contentBefore === contentAfter && retryCount > 0) {
+            console.log(`No content change detected for "${description}", retrying... (${retryCount} attempts left)`);
+            return await clickShowMoreAndWait(root, buttonSelector, description, retryCount - 1);
         }
+        
         return true;
       }
     } catch (error) {
       console.warn(`could not click "show more ${description}" or wait for mutation:`, error);
+      if (retryCount > 0) {
+        console.log(`Retrying "show more ${description}"... (${retryCount} attempts left)`);
+        await sleep(1000); // Wait a bit longer before retry
+        return await clickShowMoreAndWait(root, buttonSelector, description, retryCount - 1);
+      }
     }
     return false;
+  };
+  
+  // Helper to wait for an element to appear
+  const waitForElement = (selector, root = document, timeout = 5000) => {
+    return new Promise((resolve) => {
+      if (qs(selector, root)) {
+        resolve(qs(selector, root));
+        return;
+      }
+      
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        const element = qs(selector, root);
+        if (element) {
+          clearInterval(interval);
+          resolve(element);
+        } else if (Date.now() - startTime > timeout) {
+          clearInterval(interval);
+          console.warn(`Timeout waiting for element: ${selector}`);
+          resolve(null);
+        }
+      }, 200);
+    });
   };
 
   // extracts data from the currently displayed applicant detail section
@@ -131,22 +174,73 @@
     }
     console.log("extract: found #hiring-detail-root element.");
 
-    // Click show more buttons and wait
-    await clickShowMoreAndWait(root, "button[aria-label*='more experiences']", "experience");
-    await clickShowMoreAndWait(root, "button[aria-label*='more educations']", "education");
-    await clickShowMoreAndWait(root, "button[aria-label*='more about resume']", "resume");
+    // Ensure we're at the top of the detail panel for best interaction
+    root.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    await sleep(500);
     
-    // Click any inline show more text buttons
+    // STEP 1: Expand all "Show more" sections as specified in HTML_ELEMENTS_TO_SAVE.md
+    console.log("Expanding Experience section...");
+    await clickShowMoreAndWait(root, "button[aria-label^='Show'][aria-label$='experiences']", "experience");
+    
+    console.log("Expanding Education section...");
+    await clickShowMoreAndWait(root, "button[aria-label^='Show'][aria-label$='educations']", "education");
+    
+    console.log("Expanding Resume section...");
+    await clickShowMoreAndWait(root, "button[aria-label^='Show more'][aria-label*='resume']", "resume");
+    
+    // STEP 2: Wait for iframe to load if present
+    const resumeIframe = qs(".hiring-resume-viewer__iframe", root);
+    if (resumeIframe) {
+      console.log("Resume iframe found, waiting for src to be populated...");
+      // Wait a bit for the iframe src to be populated
+      await sleep(1000);
+    }
+    
+    // STEP 3: Click all inline "show more" text buttons
+    console.log("Expanding all inline text buttons...");
     const inlineButtons = qsa("button.inline-show-more-text__button", root);
+    console.log(`Found ${inlineButtons.length} inline text expanders`);
+    
     for (const button of inlineButtons) {
       try {
         if (button && !button.closest(".inline-show-more-text--is-expanded")) {
+          // Scroll to ensure button is visible
+          button.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          await sleep(300);
+          
+          console.log("Clicking inline text expander...");
           button.click();
-          await sleep(200);
+          
+          // Wait for the expanded class to appear
+          await sleep(500);
+          
+          // Verify expansion
+          const isExpanded = button.closest(".inline-show-more-text--is-expanded");
+          if (!isExpanded) {
+            console.log("Retrying inline text expansion...");
+            button.click();
+            await sleep(500);
+          }
         }
       } catch (e) {
         console.warn("Failed to expand inline text:", e);
       }
+    }
+    
+    // STEP 4: Check for "More..." dropdown and expand if present
+    try {
+      const moreButton = await waitForElement("button:has-text('More…')", root, 1000) || 
+                          qs("button.artdeco-dropdown__trigger", root);
+      
+      if (moreButton) {
+        console.log("Found More dropdown, expanding...");
+        moreButton.scrollIntoView({ block: 'center' });
+        await sleep(300);
+        moreButton.click();
+        await sleep(500); // Wait for dropdown content to appear
+      }
+    } catch (e) {
+      console.warn("Failed to expand More dropdown:", e);
     }
 
     // helper to safely get text content
@@ -250,9 +344,17 @@
     console.log(`extract: processed sections, found ${experience_items.length} experiences, ${education_items.length} educations.`);
     
     // Extract work snippet from left column if available
-    const work_snippet = qsa("ul[aria-label='Work experience'] li span.lt-line-clamp__line", document)
+    // First try the specific selector from HTML_ELEMENTS_TO_SAVE.md
+    let work_snippet = qsa("ul[aria-label='Work experience'] li span.lt-line-clamp__line", document)
       .map(el => el.innerText.trim())
       .filter(Boolean);
+      
+    // If nothing found, try alternative selectors that might contain work experience
+    if (work_snippet.length === 0) {
+      work_snippet = qsa(".artdeco-entity-lockup__metadata li", document)
+        .map(el => el.innerText.trim())
+        .filter(Boolean);
+    }
     
     // Extract preferred qualifications
     let preferred_qualifications_met = null;
@@ -267,9 +369,22 @@
     }
     
     // View status (viewed/unviewed)
+    // This is now captured from the list view before clicking on the applicant
+    // See the main loop where we set applicantData.view_status
     let view_status = null;
-    // This would typically be extracted from the list view, not the detail view
-    // We'll leave it null for now as it's not easily accessible from the detail panel
+    
+    // Try to extract it from the detail panel if possible
+    const viewStatusIndicator = qs(".hiring-applicant-header__viewed-indicator", root) ||
+                               qs(".hiring-applicant-header [aria-label*='viewed']", root);
+    if (viewStatusIndicator) {
+      const viewedText = viewStatusIndicator.innerText.trim().toLowerCase() || 
+                        viewStatusIndicator.getAttribute('aria-label')?.toLowerCase();
+      if (viewedText && viewedText.includes('unviewed')) {
+        view_status = 'unviewed';
+      } else if (viewedText) {
+        view_status = 'viewed';
+      }
+    }
 
 
     // Screening Questions Scraping - improved based on HTML_ELEMENTS_TO_SAVE.md
@@ -407,6 +522,16 @@
         if (window.__LI_EXPORT_TERMINATE) {
           console.log("Early termination requested after loading detail view. Skipping extraction.");
           break;
+        }
+        
+        // Ensure the detail panel is fully loaded and visible
+        await sleep(500); // Additional wait for UI to stabilize
+        
+        // Scroll to top of detail panel to ensure all elements are properly loaded
+        const detailRoot = qs("#hiring-detail-root");
+        if (detailRoot) {
+          detailRoot.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          await sleep(300);
         }
 
         const applicantData = await extract();
