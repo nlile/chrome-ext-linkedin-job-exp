@@ -57,13 +57,21 @@ document.getElementById("export").addEventListener("click", async () => {
               func: () => ({
                   isRunning: !!window.__LI_EXPORT_RUNNING,
                   hasData: Array.isArray(window.__LI_EXPORT_DATA) && window.__LI_EXPORT_DATA.length > 0,
-                  dataCount: Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0
+                  dataCount: Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0,
+                  isTerminating: !!window.__LI_EXPORT_TERMINATE
               })
           });
           
-          const { isRunning, hasData, dataCount } = checkResult[0].result;
+          const { isRunning, hasData, dataCount, isTerminating } = checkResult[0].result;
           
           if (isRunning) {
+              // If already terminating, just wait
+              if (isTerminating) {
+                  statusElement.textContent = "Already stopping, please wait...";
+                  setTimeout(() => window.close(), 1500);
+                  return;
+              }
+              
               // If running, execute script to terminate and export
               statusElement.textContent = "Stopping and exporting...";
               await chrome.scripting.executeScript({
@@ -71,10 +79,19 @@ document.getElementById("export").addEventListener("click", async () => {
                   func: () => {
                       // Set termination flag to true
                       window.__LI_EXPORT_TERMINATE = true;
+                      // Force export after a short delay
+                      setTimeout(() => {
+                          if (window.__LI_EXPORT_DATA && window.__LI_EXPORT_DATA.length > 0) {
+                              console.log("Forcing export after termination request...");
+                              window.__LI_EXPORT_FORCE_EXPORT = true;
+                          }
+                      }, 500);
                       console.log("LinkedIn Exporter: Termination requested via popup.");
                   }
               });
-              window.close(); // Close popup after setting termination flag
+              
+              // Show a message that we're stopping and wait a bit before closing
+              setTimeout(() => window.close(), 1000); // Close popup after setting termination flag
           } else if (hasData) {
               // If not running but has data, trigger export
               statusElement.textContent = `Exporting ${dataCount} applicants...`;

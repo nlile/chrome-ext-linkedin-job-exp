@@ -5,8 +5,17 @@
     console.warn("Exporter is already running.");
     alert("Exporter is already running. Click again to stop and export current data.");
     window.__LI_EXPORT_TERMINATE = true;
+    // Force immediate export if termination is requested
+    setTimeout(() => {
+      if (window.__LI_EXPORT_DATA && window.__LI_EXPORT_DATA.length > 0) {
+        console.log("Forcing export after termination request...");
+        // This will trigger the export in the next event loop cycle
+        window.__LI_EXPORT_FORCE_EXPORT = true;
+      }
+    }, 500);
     return;
   }
+  window.__LI_EXPORT_FORCE_EXPORT = false;
   window.__LI_EXPORT_RUNNING = true;
   window.__LI_EXPORT_TERMINATE = false;
   window.__LI_EXPORT_DATA = [];
@@ -326,6 +335,12 @@
   const listContainerSelector = ".hiring-applicants__list-container";
 
   while (true) {
+    // Check for early termination flag at the beginning of each page
+    if (window.__LI_EXPORT_TERMINATE) {
+      console.log("Early termination requested at page level. Stopping scraping and proceeding to export.");
+      break;
+    }
+    
     console.log(`starting page ${currentPage}...`);
     const currentListContainer = qs(listContainerSelector);
     if (!currentListContainer) {
@@ -378,9 +393,21 @@
              await sleep(50); // tiny pause even if already in view
         }
 
+        // Check for termination flag right before clicking
+        if (window.__LI_EXPORT_TERMINATE) {
+          console.log("Early termination requested before clicking applicant. Skipping.");
+          break;
+        }
+        
         link.click();
         // Use the enhanced wait for base details
         await waitForDetailBase();
+        
+        // Check for termination flag after loading detail view but before extraction
+        if (window.__LI_EXPORT_TERMINATE) {
+          console.log("Early termination requested after loading detail view. Skipping extraction.");
+          break;
+        }
 
         const applicantData = await extract();
         if (applicantData?.name) { // ensure data & name extracted
@@ -404,6 +431,12 @@
       }
     } // end loop through applicants on page
 
+    // Check for early termination flag before pagination
+    if (window.__LI_EXPORT_TERMINATE) {
+      console.log("Early termination requested before pagination. Stopping scraping and proceeding to export.");
+      break;
+    }
+    
     // --- pagination ---
     const nextPageNumber = currentPage + 1;
     const nextButton = qs(`ul.artdeco-pagination__pages button[aria-label='Page ${nextPageNumber}']`);
@@ -423,11 +456,26 @@
   } // end while loop (pagination)
 
   // ---------- download ----------
-  if (data.length === 0) {
+  // Set up a check for forced export (for early termination)
+  const checkForForcedExport = () => {
+    if (window.__LI_EXPORT_FORCE_EXPORT && data.length > 0) {
+      console.log("Forced export triggered with", data.length, "records");
+      window.__LI_EXPORT_FORCE_EXPORT = false;
+      return true;
+    }
+    return false;
+  };
+  
+  // Check if we need to force export due to early termination
+  if (checkForForcedExport()) {
+    // Continue to export
+    console.log("Proceeding with forced export...");
+  } else if (data.length === 0) {
     console.warn("no data extracted. cannot generate csv.");
     alert("export failed: no applicant data could be extracted.");
     window.__LI_EXPORT_RUNNING = false;
     window.__LI_EXPORT_TERMINATE = false;
+    window.__LI_EXPORT_FORCE_EXPORT = false;
     return;
   }
 
@@ -496,5 +544,6 @@
 
   window.__LI_EXPORT_RUNNING = false; // reset flag
   window.__LI_EXPORT_TERMINATE = false; // reset termination flag
+  window.__LI_EXPORT_FORCE_EXPORT = false; // reset force export flag
   console.log("linkedin applicants exporter: finished.");
 })();
