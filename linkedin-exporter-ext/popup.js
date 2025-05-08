@@ -1,5 +1,7 @@
-/* Injects the scraper into the current tab */
+/* popup.js – keep-alive patch */
 document.addEventListener('DOMContentLoaded', async () => {
+  /* keep popup alive */
+  chrome.runtime.connect({ name: "keepAlive" });
   const statusElement = document.getElementById("status");
   const exportButton = document.getElementById("export");
   
@@ -75,7 +77,7 @@ document.getElementById("export").addEventListener("click", async () => {
               // If already terminating, just wait
               if (isTerminating) {
                   statusElement.textContent = "Already stopping, please wait...";
-                  setTimeout(() => window.close(), 1500);
+                  // Removed automatic window closing
                   return;
               }
               
@@ -96,7 +98,7 @@ document.getElementById("export").addEventListener("click", async () => {
                       // Force export immediately if we have data
                       if (window.__LI_EXPORT_DATA && window.__LI_EXPORT_DATA.length > 0) {
                           // Create a copy of the data to ensure it's not modified during export
-                          const dataCopy = [...window.__LI_EXPORT_DATA];
+                          const dataCopy = JSON.parse(JSON.stringify(window.__LI_EXPORT_DATA));
                           console.log(`Created data copy with ${dataCopy.length} records`);
                           
                           // Set force export flag
@@ -113,8 +115,36 @@ document.getElementById("export").addEventListener("click", async () => {
                   }
               });
               
-              // Show a message that we're stopping and wait a bit before closing
-              setTimeout(() => window.close(), 1500); // Close popup after setting termination flag
+              // Update UI and keep popup open so user can see status
+              statusElement.textContent = "Scraper stopping and exporting data...";
+              
+              // Check status periodically
+              const checkExportStatus = async () => {
+                  try {
+                      const result = await chrome.scripting.executeScript({
+                          target: { tabId: tab.id },
+                          func: () => ({
+                              completed: !!window.__LI_EXPORT_COMPLETED,
+                              dataLength: Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0
+                          })
+                      });
+                      
+                      const { completed, dataLength } = result[0].result;
+                      
+                      if (completed) {
+                          statusElement.textContent = `Export completed with ${dataLength} records.`;
+                      } else {
+                          statusElement.textContent = `Still exporting ${dataLength} records...`;
+                          setTimeout(checkExportStatus, 1000);
+                      }
+                  } catch (e) {
+                      console.error("Error checking export status:", e);
+                      statusElement.textContent = "Export in progress...";
+                  }
+              };
+              
+              // Start checking status
+              setTimeout(checkExportStatus, 1000);
           } else if (hasData) {
               // If not running but has data, trigger export
               statusElement.textContent = `Exporting ${dataCount} applicants...`;
@@ -170,11 +200,37 @@ document.getElementById("export").addEventListener("click", async () => {
           } else {
               // If not running and no data, inject the content script
               statusElement.textContent = "Starting scraper...";
+              
+              // Inject content script
               await chrome.scripting.executeScript({
                   target: { tabId: tab.id },
                   files: ["content.js"]
               });
-              window.close(); // Close popup after successful injection
+              
+              // Check if script is running properly after injection
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              try {
+                  const checkResult = await chrome.scripting.executeScript({
+                      target: { tabId: tab.id },
+                      func: () => ({
+                          isRunning: !!window.__LI_EXPORT_RUNNING,
+                          hasStarted: true
+                      })
+                  });
+                  
+                  const { isRunning, hasStarted } = checkResult[0].result;
+                  
+                  if (isRunning) {
+                      statusElement.textContent = "Scraper running. This window will stay open.";
+                      // Keep the popup open so the user can track progress and stop if needed
+                  } else {
+                      statusElement.textContent = "Error: Scraper not running properly. Please try again.";
+                  }
+              } catch (e) {
+                  console.error("Error checking if scraper started:", e);
+                  statusElement.textContent = "Scraper started. This window will stay open.";
+              }
           }
       } catch (error) {
           console.error("Failed to inject content script:", error);
