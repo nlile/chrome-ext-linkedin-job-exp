@@ -1,4 +1,4 @@
-/* LinkedIn Applicants Exporter — content script (navigation-&-loop-fixed 2025-05-08) */
+/* LinkedIn Applicants Exporter — content script (navigation-&-null-safe fix 2025-05-09) */
 (async () => {
   /* ───────────────────────── 1 · GLOBAL STATE ───────────────────────── */
   if (window.__LI_EXPORT_RUNNING) {
@@ -51,19 +51,32 @@
   };
 
   /* ─────────────────────── 4 · DOM-WAIT HELPERS ─────────────────────── */
-  const waitForDetail = (timeout = 7_000) =>
-    new Promise((res, rej) => {
-      const need = [
-        "#hiring-detail-root h1",
-        "#hiring-detail-root .hiring-profile-highlights__see-full-profile a",
-      ];
+  /**
+   * Wait until the detail panel is *reasonably* loaded.
+   * - Mandatory: the `<h1>` heading (candidate name) must exist.
+   * - Nice-to-have: the “see full profile” link, OR we’ve waited `grace` ms.
+   * Always resolves (never rejects) to avoid infinite loops on sparse profiles.
+   */
+  const waitForDetail = (timeout = 8_000, grace = 2_000) =>
+    new Promise((res) => {
+      const start = Date.now();
+      const isReady = () => {
+        const hasH1 = qs("#hiring-detail-root h1");
+        if (!hasH1) return false;
+        /* either the link is there, or we've given it a small grace period */
+        if (qs("#hiring-detail-root .hiring-profile-highlights__see-full-profile a")) return true;
+        return Date.now() - start > grace;
+      };
+
       const id = setInterval(() => {
-        if (need.every((s) => qs(s))) {
+        if (isReady()) {
           clearInterval(id);
-          return setTimeout(res, 350);          // little extra buffer
+          return setTimeout(res, 350);          // small extra buffer
         }
       }, 150);
-      setTimeout(() => { clearInterval(id); rej(new Error("detail panel timeout")); }, timeout);
+
+      /* hard stop — resolve anyway, but never reject */
+      setTimeout(() => { clearInterval(id); res(); }, timeout);
     });
 
   const waitForMutation = (el,
@@ -178,7 +191,7 @@
 
     return {
       applicant_id,
-      profile_url: attr(".hiring-profile-highlights__see-full-profile a","href"),
+      profile_url: attr(".hiring-profile-highlights__see-full-profile a","href") || null,
       name,
       connection_degree: txt(".hiring-applicant-header__badge") ??
                          txt(".hiring-applicant-header h1 + span"),
@@ -235,7 +248,7 @@
 
     if (next) {
       next.scrollIntoView({ block:"center" }); await sleep(250); next.click();
-      try { await waitForDetail(); } catch { continue; }
+      await waitForDetail();
 
       const data = await extract();
       if (data?.applicant_id && !scrapedIds.has(data.applicant_id)) {
