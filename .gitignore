@@ -12,3 +12,5 @@ test/linkedin_job_page.html
 node_modules/
 
 cookies_export.json
+.flatignore
+flat.sh
