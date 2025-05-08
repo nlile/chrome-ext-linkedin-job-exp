@@ -22,13 +22,25 @@ Exports applicant data from a LinkedIn job posting's applicant view to a CSV fil
 
 ## Output CSV Columns
 
--   `name`
--   `headline`
--   `location`
--   `applied` (timestamp)
--   `degree` (connection degree, e.g., 1st, 2nd, 3rd)
--   `profile_url`
--   `resume_url` (if available)
--   `experience_json` (JSON array of {title, company, duration})
--   `education_json` (JSON array of {school, degree_field, duration})
--   `screening_json` (JSON array of {q, ideal, ans})
+The exported CSV columns (as of your current extension output) are:
+
+- `applicant_id`
+- `profile_url`
+- `name`
+- `connection_degree`
+- `headline`
+- `location`
+- `applied_time`
+- `preferred_qualifications_met`
+- `preferred_qualifications_total`
+- `work_snippet`
+- `view_status`
+- `rating`
+- `experience_items` (JSON array)
+- `education_items` (JSON array)
+- `resume_download_url`
+- `resume_iframe_src`
+- `screening_questions` (JSON array)
+
+**Note:**
+- This schema reflects the actual output of the extension as of your last export. If you update the extension or its code, the columns may change. If in doubt, check the export logic in `content.js` or test a fresh export.
