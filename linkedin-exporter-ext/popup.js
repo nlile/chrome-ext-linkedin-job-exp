@@ -54,15 +54,22 @@ document.getElementById("export").addEventListener("click", async () => {
           // First check if the scraper is already running
           const checkResult = await chrome.scripting.executeScript({
               target: { tabId: tab.id },
-              func: () => ({
-                  isRunning: !!window.__LI_EXPORT_RUNNING,
-                  hasData: Array.isArray(window.__LI_EXPORT_DATA) && window.__LI_EXPORT_DATA.length > 0,
-                  dataCount: Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0,
-                  isTerminating: !!window.__LI_EXPORT_TERMINATE
-              })
+              func: () => {
+                  // Get current state
+                  const state = {
+                      isRunning: !!window.__LI_EXPORT_RUNNING,
+                      hasData: Array.isArray(window.__LI_EXPORT_DATA) && window.__LI_EXPORT_DATA.length > 0,
+                      dataCount: Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0,
+                      isTerminating: !!window.__LI_EXPORT_TERMINATE,
+                      forceExport: !!window.__LI_EXPORT_FORCE_EXPORT
+                  };
+                  
+                  console.log("Current state:", state);
+                  return state;
+              }
           });
           
-          const { isRunning, hasData, dataCount, isTerminating } = checkResult[0].result;
+          const { isRunning, hasData, dataCount, isTerminating, forceExport } = checkResult[0].result;
           
           if (isRunning) {
               // If already terminating, just wait
@@ -77,24 +84,41 @@ document.getElementById("export").addEventListener("click", async () => {
               await chrome.scripting.executeScript({
                   target: { tabId: tab.id },
                   func: () => {
+                      console.log("Termination requested via popup");
+                      
+                      // Log current data state
+                      const dataLength = Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0;
+                      console.log(`Current data length: ${dataLength}`);
+                      
                       // Set termination flag to true
                       window.__LI_EXPORT_TERMINATE = true;
-                      // Force export after a short delay
-                      setTimeout(() => {
-                          if (window.__LI_EXPORT_DATA && window.__LI_EXPORT_DATA.length > 0) {
-                              console.log("Forcing export after termination request...");
-                              window.__LI_EXPORT_FORCE_EXPORT = true;
+                      
+                      // Force export immediately if we have data
+                      if (window.__LI_EXPORT_DATA && window.__LI_EXPORT_DATA.length > 0) {
+                          // Create a copy of the data to ensure it's not modified during export
+                          const dataCopy = [...window.__LI_EXPORT_DATA];
+                          console.log(`Created data copy with ${dataCopy.length} records`);
+                          
+                          // Set force export flag
+                          window.__LI_EXPORT_FORCE_EXPORT = true;
+                          
+                          // Use the triggerExport function if it exists
+                          if (typeof triggerExport === 'function') {
+                              console.log("Calling triggerExport function directly");
+                              setTimeout(() => triggerExport(dataCopy), 500);
                           }
-                      }, 500);
-                      console.log("LinkedIn Exporter: Termination requested via popup.");
+                      }
+                      
+                      return { success: true, message: "Termination initiated" };
                   }
               });
               
               // Show a message that we're stopping and wait a bit before closing
-              setTimeout(() => window.close(), 1000); // Close popup after setting termination flag
+              setTimeout(() => window.close(), 1500); // Close popup after setting termination flag
           } else if (hasData) {
               // If not running but has data, trigger export
               statusElement.textContent = `Exporting ${dataCount} applicants...`;
+              console.log(`Exporting ${dataCount} previously collected records`);
               await chrome.scripting.executeScript({
                   target: { tabId: tab.id },
                   func: () => {

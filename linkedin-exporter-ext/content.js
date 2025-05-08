@@ -4,22 +4,119 @@
   if (window.__LI_EXPORT_RUNNING) {
     console.warn("Exporter is already running.");
     alert("Exporter is already running. Click again to stop and export current data.");
+    
+    // Set termination flag
     window.__LI_EXPORT_TERMINATE = true;
+    console.log("Termination flag set to true");
+    
+    // Log current data status
+    const dataLength = Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0;
+    console.log(`Current data length before forced export: ${dataLength}`);
+    
     // Force immediate export if termination is requested
+    // Use a longer timeout to ensure the main loop has time to break
     setTimeout(() => {
+      console.log("Timeout callback for forced export executing...");
+      const currentDataLength = Array.isArray(window.__LI_EXPORT_DATA) ? window.__LI_EXPORT_DATA.length : 0;
+      console.log(`Data length in timeout callback: ${currentDataLength}`);
+      
       if (window.__LI_EXPORT_DATA && window.__LI_EXPORT_DATA.length > 0) {
         console.log("Forcing export after termination request...");
         // This will trigger the export in the next event loop cycle
         window.__LI_EXPORT_FORCE_EXPORT = true;
+        
+        // Directly trigger the export function to ensure it happens
+        triggerExport(window.__LI_EXPORT_DATA);
+      } else {
+        console.warn("No data to export after termination.");
       }
-    }, 500);
+    }, 1000);
+    
     return;
   }
   window.__LI_EXPORT_FORCE_EXPORT = false;
+  
+  // Helper function to trigger export
+  const triggerExport = (data) => {
+    if (!Array.isArray(data) || data.length === 0) {
+      console.warn("triggerExport: No data to export.");
+      return;
+    }
+    
+    console.log(`triggerExport: Exporting ${data.length} records...`);
+    
+    // Updated header order for csv based on HTML_ELEMENTS_TO_SAVE.md
+    const header = [
+      // Basic identifiers
+      "applicant_id",
+      "profile_url",
+      "name",
+      
+      // Basic profile info
+      "connection_degree",
+      "headline",
+      "location",
+      "applied_time",
+      
+      // Qualifications
+      "preferred_qualifications_met",
+      "preferred_qualifications_total",
+      
+      // List view data
+      "work_snippet",
+      "view_status",
+      
+      // Detail view data
+      "rating",
+      "experience_items",
+      "education_items",
+      "resume_download_url",
+      "resume_iframe_src",
+      "screening_questions",
+    ];
+    
+    // generate csv rows, ensuring values are strings and properly quoted/escaped
+    const csvRows = data.map(row =>
+      header.map(fieldName => {
+        const value = row[fieldName] ?? ""; // default to empty string if null/undefined
+        const stringValue = typeof value === 'string' ? value : JSON.stringify(value); // ensure string
+        // escape double quotes by doubling them, wrap in double quotes
+        return `"${stringValue.replace(/"/g, '""')}"`;
+      }).join(",")
+    );
+    
+    const csvString = [header.join(","), ...csvRows].join("\n");
+    
+    // trigger download
+    try {
+      const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `linkedin_applicants_${Date.now()}.csv`);
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url); // clean up blob url
+      console.log("CSV download triggered successfully.");
+      alert(`Export complete: ${data.length} applicants exported.`);
+      return true;
+    } catch (error) {
+      console.error("Error during CSV download:", error);
+      alert("Failed to trigger CSV download.");
+      return false;
+    }
+  };
+  // Set initial state
   window.__LI_EXPORT_RUNNING = true;
   window.__LI_EXPORT_TERMINATE = false;
-  window.__LI_EXPORT_DATA = [];
-  console.log("linkedin applicants exporter: starting...");
+  
+  // Initialize data array and store reference
+  const data = [];
+  window.__LI_EXPORT_DATA = data;
+  
+  console.log("LinkedIn applicants exporter: starting...");
 
   // --- helpers ---
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -441,8 +538,7 @@
   };
 
   // ---------- main loop ----------
-  const data = [];
-  window.__LI_EXPORT_DATA = data; // Store data globally for early termination export
+  // data array is already initialized above
   let currentPage = 1;
   // selector for the clickable applicant links in the list
   const applicantLinkSelector = "li.hiring-applicants__list-item a[href*='/applicants/']";
@@ -581,94 +677,31 @@
   } // end while loop (pagination)
 
   // ---------- download ----------
-  // Set up a check for forced export (for early termination)
-  const checkForForcedExport = () => {
-    if (window.__LI_EXPORT_FORCE_EXPORT && data.length > 0) {
-      console.log("Forced export triggered with", data.length, "records");
-      window.__LI_EXPORT_FORCE_EXPORT = false;
-      return true;
-    }
-    return false;
-  };
-  
-  // Check if we need to force export due to early termination
-  if (checkForForcedExport()) {
-    // Continue to export
-    console.log("Proceeding with forced export...");
-  } else if (data.length === 0) {
-    console.warn("no data extracted. cannot generate csv.");
-    alert("export failed: no applicant data could be extracted.");
+  // Check if we have data to export
+  if (data.length === 0) {
+    console.warn("No data extracted. Cannot generate CSV.");
+    alert("Export failed: No applicant data could be extracted.");
     window.__LI_EXPORT_RUNNING = false;
     window.__LI_EXPORT_TERMINATE = false;
     window.__LI_EXPORT_FORCE_EXPORT = false;
     return;
   }
+  
+  // Log the final data state
+  console.log(`Extraction complete. Found ${data.length} total applicants. Generating CSV...`);
+  console.log(`Data array reference check: window.__LI_EXPORT_DATA === data? ${window.__LI_EXPORT_DATA === data}`);
+  console.log(`window.__LI_EXPORT_DATA length: ${window.__LI_EXPORT_DATA.length}`);
+  
+  // Use the triggerExport function to handle the export
+  const exportSuccess = triggerExport(data);
 
-  console.log(`extraction complete. found ${data.length} total applicants. generating csv...`);
-
-  // Updated header order for csv based on HTML_ELEMENTS_TO_SAVE.md
-  const header = [
-    // Basic identifiers
-    "applicant_id",
-    "profile_url",
-    "name",
-    
-    // Basic profile info
-    "connection_degree",
-    "headline",
-    "location",
-    "applied_time",
-    
-    // Qualifications
-    "preferred_qualifications_met",
-    "preferred_qualifications_total",
-    
-    // List view data
-    "work_snippet",
-    "view_status",
-    
-    // Detail view data
-    "rating",
-    "experience_items",
-    "education_items",
-    "resume_download_url",
-    "resume_iframe_src",
-    "screening_questions",
-  ];
-
-  // generate csv rows, ensuring values are strings and properly quoted/escaped
-  const csvRows = data.map(row =>
-    header.map(fieldName => {
-      const value = row[fieldName] ?? ""; // default to empty string if null/undefined
-      const stringValue = typeof value === 'string' ? value : JSON.stringify(value); // ensure string
-      // escape double quotes by doubling them, wrap in double quotes
-      return `"${stringValue.replace(/"/g, '""')}"`;
-    }).join(",")
-  );
-
-  const csvString = [header.join(","), ...csvRows].join("\n");
-
-  // trigger download
-  try {
-      const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.setAttribute("href", url);
-      link.setAttribute("download", `linkedin_applicants_${Date.now()}.csv`);
-      link.style.visibility = "hidden";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url); // clean up blob url
-      console.log("csv download triggered.");
-      alert(`export complete: ${data.length} applicants exported.`);
-  } catch (error) {
-      console.error("error during csv download:", error);
-      alert("failed to trigger csv download.");
-  }
-
-  window.__LI_EXPORT_RUNNING = false; // reset flag
-  window.__LI_EXPORT_TERMINATE = false; // reset termination flag
-  window.__LI_EXPORT_FORCE_EXPORT = false; // reset force export flag
-  console.log("linkedin applicants exporter: finished.");
+  // Reset all flags
+  window.__LI_EXPORT_RUNNING = false;
+  window.__LI_EXPORT_TERMINATE = false;
+  window.__LI_EXPORT_FORCE_EXPORT = false;
+  
+  // Keep the data available for potential re-export
+  // window.__LI_EXPORT_DATA remains set to the data array
+  
+  console.log("LinkedIn applicants exporter: finished.");
 })();
