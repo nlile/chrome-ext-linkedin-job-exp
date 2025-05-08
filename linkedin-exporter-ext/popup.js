@@ -1,9 +1,13 @@
 /* popup.js – keep-alive patch */
+// Cache DOM elements at the highest scope for reuse
+let statusElement;
+let exportButton;
+
 document.addEventListener('DOMContentLoaded', async () => {
   /* keep popup alive */
   chrome.runtime.connect({ name: "keepAlive" });
-  const statusElement = document.getElementById("status");
-  const exportButton = document.getElementById("export");
+  statusElement = document.getElementById("status");
+  exportButton = document.getElementById("export");
   
   // Check current state when popup opens
   try {
@@ -44,7 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 document.getElementById("export").addEventListener("click", async () => {
-  const statusElement = document.getElementById("status");
+  // Using the cached statusElement from higher scope
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
   
